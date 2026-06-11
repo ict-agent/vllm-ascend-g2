@@ -10,6 +10,11 @@
 
 add_op_to_compiled_list()
 
+# Declare dependency on the compressor op so that the CANN build system
+# automatically copies compressor's kernel source files into the build directory.
+# Without this, opc cannot resolve ../../compressor/ relative paths in the fused kernel.
+set(compressor_scatter_update_v2_depends attention/compressor CACHE INTERNAL "Dependencies for compressor_scatter_update_v2")
+
 if (BUILD_OPEN_PROJECT)
     target_sources(op_host_aclnn PRIVATE
         compressor_scatter_update_v2_def.cpp
