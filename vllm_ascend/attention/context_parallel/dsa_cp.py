@@ -1124,7 +1124,6 @@ class AscendDSACPImpl(DSAAttentionImpl):
             rotary_mode="interleave",
             partial_slice=[self.nope_head_dim, self.head_dim],
         )
-        torch.ops._C_ascend.npu_scatter_nd_update_v2(swa_kv_cache, swa_metadata.req_metadata.slot_mapping, kv)
 
         compress_topk_idxs = None
         if self.compress_ratio > 1:
@@ -1154,7 +1153,11 @@ class AscendDSACPImpl(DSAAttentionImpl):
                 )
 
             coff = 2 if self.compressor_overlap else 1
-            compressed_kv = torch.ops._C_ascend.compressor(
+            # Fused Compressor + ScatterNdUpdateV2: combines scatter write of kv
+            # into swa_kv_cache with compressor computation in a single kernel launch.
+            # The scatter writes' discrete memory access latency is masked by the
+            # compressor pipeline overlap.
+            compressed_kv = torch.ops._C_ascend.compressor_scatter_update_v2(
                 hidden_states,
                 self.compressor_wkv.weight,
                 self.compressor_wgate.weight,
@@ -1163,6 +1166,9 @@ class AscendDSACPImpl(DSAAttentionImpl):
                 self.compressor_norm.weight,
                 compress_sin.view(-1, compress_sin.shape[-1]),
                 compress_cos.view(-1, compress_cos.shape[-1]),
+                swa_kv_cache,
+                swa_metadata.req_metadata.slot_mapping,
+                kv,
                 state_block_table=compressor_kv_state_metadata.req_metadata.block_table,
                 cu_seqlens=actual_seq_lengths_query,
                 seqused=None,
@@ -1173,6 +1179,7 @@ class AscendDSACPImpl(DSAAttentionImpl):
                 norm_eps=self.compressor_norm_eps,
                 rotary_mode=2,
                 cache_mode=1,
+                scatter_strides=swa_kv_cache.stride(),
             )
 
             if compressed_kv.numel() == 0:
@@ -1180,6 +1187,9 @@ class AscendDSACPImpl(DSAAttentionImpl):
             torch.ops._C_ascend.npu_scatter_nd_update_v2(
                 compress_kv_cache, compressor_attn_metadata.req_metadata.slot_mapping, compressed_kv
             )
+        else:
+            # When compress_ratio <= 1, only scatter update without compressor
+            torch.ops._C_ascend.npu_scatter_nd_update_v2(swa_kv_cache, swa_metadata.req_metadata.slot_mapping, kv)
 
         common_attn_kwargs = dict(
             cu_seqlens_q=local_seq_lengths_query,

@@ -2012,6 +2012,59 @@ void npu_scatter_nd_update_v2(
     return;
 }
 
+std::tuple<at::Tensor> compressor_scatter_update_v2(
+    const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate,
+    at::Tensor &state_cache, const at::Tensor &ape, const at::Tensor &norm_weight,
+    const at::Tensor &rope_sin, const at::Tensor &rope_cos,
+    const c10::optional<at::Tensor> &state_block_table,
+    const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
+    const c10::optional<at::Tensor> &start_pos,
+    at::Tensor &swa_kv_cache, const at::Tensor &scatter_indices, const at::Tensor &scatter_updates,
+    int64_t rope_head_dim, int64_t cmp_ratio, int64_t coff,
+    double norm_eps, int64_t rotary_mode, int64_t cache_mode,
+    const c10::optional<at::IntArrayRef> &scatter_strides)
+{
+    constexpr int CONTINUOUS = 1;
+    constexpr int32_t DIM_1 = 1;
+    constexpr int32_t DIM_2 = 2;
+    constexpr int32_t DIM_3 = 3;
+    constexpr int32_t VALUE_0 = 0;
+
+    // === Compressor input validation (same as standalone compressor) ===
+    auto x_dim = x.dim();
+    TORCH_CHECK(x_dim == DIM_2 || x_dim == DIM_3, "x dim num[", x_dim, "] should be 2 or 3");
+    TORCH_CHECK(norm_weight.defined(), "Check norm_weight != nullptr failed");
+    auto norm_weight_dim = norm_weight.dim();
+    TORCH_CHECK(norm_weight_dim == DIM_1, "norm_weight dim num[", norm_weight_dim, "] should be 1");
+    TORCH_CHECK(rope_sin.defined(), "Check rope_sin != nullptr failed");
+    auto rope_sin_dim = rope_sin.dim();
+    TORCH_CHECK(rope_sin_dim == x_dim, "rope_sin dim num[", rope_sin_dim, "] should be equal to x dim num[", x_dim, "]");
+    TORCH_CHECK(cmp_ratio > VALUE_0, "cmp_ratio should be greater than 0");
+
+    // === Construct compressor output tensor ===
+    std::tuple<at::Tensor> output = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio, coff);
+    at::Tensor cmp_kv = std::get<0>(output);
+
+    // === Compressor state_cache handling ===
+    auto state_cache_dim = state_cache.dim();
+    TORCH_CHECK(state_cache_dim == DIM_3, "state_cache dim num[", state_cache_dim, "] should be 3");
+    int64_t state_cache_stride_dim0 = state_cache.stride(0);
+
+    // === Scatter strides ===
+    at::IntArrayRef swa_kv_cache_stride = scatter_strides.has_value() ?
+        scatter_strides.value() : swa_kv_cache.strides();
+
+    // === Execute fused operator ===
+    EXEC_NPU_CMD(aclnnCompressorScatterUpdateV2,
+        x, wkv, wgate, state_cache, ape, norm_weight, rope_sin, rope_cos,
+        state_block_table, cu_seqlens, seqused, start_pos,
+        swa_kv_cache, scatter_indices, scatter_updates,
+        rope_head_dim, cmp_ratio, coff, norm_eps, rotary_mode, cache_mode,
+        state_cache_stride_dim0, swa_kv_cache_stride, cmp_kv);
+
+    return std::tuple<at::Tensor>(cmp_kv);
+}
+
 std::tuple<at::Tensor, at::Tensor, at::Tensor> chunk_gated_delta_rule_fwd_h(
     const at::Tensor & k,
     const at::Tensor & w,
@@ -2804,5 +2857,22 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                     Tensor dt_bias, "
         "                     float beta=1.0) -> (Tensor g, Tensor beta_output)");
     ops.impl("npu_fused_gdn_gating", torch::kPrivateUse1, &vllm_ascend::npu_fused_gdn_gating);
+
+    // Fused Compressor + ScatterNdUpdateV2 operator
+    ops.def(
+        "compressor_scatter_update_v2("
+            "Tensor x, Tensor wkv, Tensor wgate, "
+            "Tensor(a!) state_cache, Tensor ape, Tensor norm_weight, "
+            "Tensor rope_sin, Tensor rope_cos, "
+            "Tensor? state_block_table, Tensor? cu_seqlens, "
+            "Tensor? seqused, Tensor? start_pos, "
+            "Tensor(a!) swa_kv_cache, Tensor scatter_indices, Tensor scatter_updates, "
+            "int rope_head_dim, int cmp_ratio, int coff, "
+            "float norm_eps, int rotary_mode, int cache_mode, "
+            "int[] scatter_strides"
+        ") -> Tensor"
+    );
+    ops.impl("compressor_scatter_update_v2", torch::kPrivateUse1,
+             &vllm_ascend::compressor_scatter_update_v2);
 }
 #endif

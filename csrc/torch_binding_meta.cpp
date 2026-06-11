@@ -1502,6 +1502,23 @@ void npu_scatter_nd_update_v2_meta(
     return;
 }
 
+std::tuple<at::Tensor> compressor_scatter_update_v2_meta(
+    const at::Tensor &x, const at::Tensor &wkv, const at::Tensor &wgate,
+    at::Tensor &state_cache, const at::Tensor &ape, const at::Tensor &norm_weight,
+    const at::Tensor &rope_sin, const at::Tensor &rope_cos,
+    const c10::optional<at::Tensor> &state_block_table,
+    const c10::optional<at::Tensor> &cu_seqlens, const c10::optional<at::Tensor> &seqused,
+    const c10::optional<at::Tensor> &start_pos,
+    at::Tensor &swa_kv_cache, const at::Tensor &scatter_indices, const at::Tensor &scatter_updates,
+    int64_t rope_head_dim, int64_t cmp_ratio, int64_t coff,
+    double norm_eps, int64_t rotary_mode, int64_t cache_mode,
+    const c10::optional<at::IntArrayRef> &scatter_strides)
+{
+    // Construct compressor output tensor (same logic as standalone compressor)
+    std::tuple<at::Tensor> output = construct_compressor_output_tensor(x, norm_weight, rope_sin, cmp_ratio, coff);
+    return output;
+}
+
 // N-gram spec decode meta
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> npu_ngram_spec_decode_meta(
     at::Tensor &token_ids,
@@ -1711,6 +1728,8 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("chunk_fwd_o", &vllm_ascend::meta::chunk_fwd_o_meta);
     // npu_fused_gdn_gating
     ops.impl("npu_fused_gdn_gating", &vllm_ascend::meta::npu_fused_gdn_gating_meta);
+    // compressor_scatter_update_v2
+    ops.impl("compressor_scatter_update_v2", &vllm_ascend::meta::compressor_scatter_update_v2_meta);
 }
 }
 #endif
