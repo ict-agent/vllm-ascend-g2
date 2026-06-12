@@ -163,8 +163,8 @@ torch.ops._C_ascend.npu_scatter_nd_update_v2(swa_kv_cache, swa_metadata.req_meta
 融合内核入口点（`compressor_scatter_update_v2.cpp`）通过相对路径引用原始 `compressor/op_kernel/` 目录的头文件：
 
 ```cpp
-#include "../compressor/op_kernel/arch35/compressor_kernel.h"
-#include "../compressor/op_kernel/arch35/compressor_kernel_full_load.h"
+#include "../../../compressor/op_kernel/arch35/compressor_kernel.h"
+#include "../../../compressor/op_kernel/arch35/compressor_kernel_full_load.h"
 ```
 
 **独立编译**（脱离 vllm-ascend 框架）时，需要复制或调整这些头文件的路径。所需文件包括：

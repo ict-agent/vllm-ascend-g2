@@ -494,7 +494,38 @@ ls /tmp/compressor_build/binary/ascend910b/bin/compressor/
 2. **功能验证**：运行 DSA attention 模型推理，对比融合前后输出数值一致性
 3. **性能验证**：对比融合前后 `compressor + scatter` 阶段的 NPU profiling 时间
 
+### 7.4 CANN 8.5.0 vs 9.0.0 API 兼容性问题
+
+**重要发现**：虽然 kernel binary（`.o` 文件）可以在 CANN 8.5.0 的 `opc` 编译器中生成，
+但生成的 proto library 和 tiling library 使用了 CANN 9.0.0 API，与 CANN 8.5.0 runtime 不兼容：
+
+- **Proto library**：CANN 9.0.0 的 proto 格式与 8.5.0 不同。`GetRegisteredOpNum()` 返回 0，
+  说明 op definition 没有被 CANN 8.5.0 runtime 识别。
+- **Tiling library**：CANN 9.0.0 使用 `OpImplRegisterV2` API 注册 tiling 函数，
+  而 CANN 8.5.0 可能不完全支持此 API。
+- **Kernel matching**：CANN runtime 的 `MatchOpModel` 需要 proto 和 tiling 同时注册才能找到 kernel。
+  由于 proto 注册失败，`execute_v2` 返回错误 100024（ACL_ERROR_INVALID_VALUE）。
+
+因此，**CANN 8.5.0 环境只能用于编译验证，不能用于运行功能测试**。
+功能测试需要在 CANN 9.0.0 环境中执行，方法如下：
+
+#### 在 CANN 9.0.0 环境中进行功能测试的推荐方法
+
+1. **将融合算子添加到 vllm-ascend csrc 构建系统**：
+   在 `csrc/CMakeLists.txt` 或 `csrc/attention/CMakeLists.txt` 中添加
+   `compressor_scatter_update_v2` 作为子目录，让 CANN 构建系统自动生成完整的
+   proto library、tiling library 和 torch binding。
+
+2. **重新编译 vllm-ascend**：完整编译 `pip install -e .` 让所有自定义算子
+   （包括 CompressorScatterUpdateV2）一起构建，生成统一的 OPP artifacts。
+
+3. **运行 `register_fused_op_opp.sh` + `merge_into_vllm_opp.sh`**：
+   或者直接通过 vllm-ascend 的正常 OPP 注册路径（`vllm_ascend.platform` 自动注册）。
+
+4. **使用 `test_fused_op_acl.py` 或 torch_binding 接口进行测试**：
+   在 CANN 9.0.0 环境中，`acl.op.execute_v2` 和 `torch.ops._C_ascend` 都可以正常调用。
+
 ---
 
-*文档编写日期：2026-06-11*
+*文档编写日期：2026-06-11，更新日期：2026-06-12（添加 CANN API 兼容性分析）*
 *编译验证环境：vllm-ascend0130-g 容器，CANN 8.5.0，Ascend 910B1 × 8*
